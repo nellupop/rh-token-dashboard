@@ -527,17 +527,31 @@
     els.explorerLink.innerHTML = '<a href="' + CONFIG.explorerBase + '/token/' + full + '" target="_blank" rel="noopener">view on Blockscout →</a>';
   }
 
-  function renderStats(holdersCount, xfers24){
+  // Each stat tile is updated independently — callers pass `undefined` for
+  // whichever piece they don't have yet, and that tile is simply left alone
+  // rather than being reset to a dash.
+  function renderSupplyStat(){
     var supplyDec = state.totalSupply ? rawToDecimal(state.totalSupply, state.decimals) : null;
-    els.statHolders.textContent = holdersCount !== null ? fmtInt(holdersCount) : "—";
     els.statSupply.textContent = supplyDec !== null ? fmtCompact(supplyDec) : "—";
     els.statSupplySub.textContent = state.symbol ? state.symbol : "\u00A0";
+  }
 
-    if(xfers24){
-      els.statXfers24.textContent = fmtInt(xfers24.count) + (xfers24.capped ? "+" : "");
-      els.statXfers24Sub.textContent = xfers24.capped ? "showing latest window" : "in last 24h";
-      els.statVol24.textContent = fmtCompact(xfers24.volume);
+  function renderHoldersStat(holdersCount){
+    if(holdersCount === undefined) return;
+    els.statHolders.textContent = (holdersCount !== null && !isNaN(holdersCount)) ? fmtInt(holdersCount) : "—";
+  }
+
+  function renderXferStats(xfers24){
+    if(xfers24 === undefined) return;
+    if(xfers24 === null){
+      els.statXfers24.textContent = "—";
+      els.statXfers24Sub.textContent = "\u00A0";
+      els.statVol24.textContent = "—";
+      return;
     }
+    els.statXfers24.textContent = fmtInt(xfers24.count) + (xfers24.capped ? "+" : "");
+    els.statXfers24Sub.textContent = xfers24.capped ? "showing latest window" : "in last 24h";
+    els.statVol24.textContent = fmtCompact(xfers24.volume);
   }
 
   function renderWallets(holders){
@@ -606,10 +620,23 @@
     var tasks = [
       fetchTokenInfo().then(function(info){
         renderHeader();
-        renderStats(info && (info.holders !== undefined) ? parseInt(info.holders,10) : null, null);
+        renderSupplyStat();
+        var rawHolders = info && (info.holders !== undefined ? info.holders : info && info.holders_count);
+        var holdersCount = rawHolders !== undefined && rawHolders !== null ? parseInt(rawHolders, 10) : null;
+        renderHoldersStat(holdersCount);
+      }).catch(function(err){
+        console.warn("token info failed:", err);
+        renderHoldersStat(null);
       }),
       fetchHolders().then(function(holders){
         renderWallets(holders);
+        // Fallback: if the token-info endpoint didn't give us a holder
+        // count, at least reflect "N+" from however many holder rows the
+        // holders endpoint itself returned (it's paginated, so this is a
+        // floor, not the true total).
+        if(els.statHolders.textContent === "—" && holders && holders.length){
+          els.statHolders.textContent = fmtInt(holders.length) + "+";
+        }
       }).catch(function(err){
         console.warn(err);
         renderError(els.walletsPanel, "Couldn't load holders from the indexer.", function(){ refreshAll(true); });
@@ -622,11 +649,12 @@
           }catch(e){ return sum; }
         }, 0);
         var capped = items.length >= (CONFIG.maxTransferPages * 50);
-        renderStats(null, {count: items.length, volume: volume, capped: capped});
+        renderXferStats({count: items.length, volume: volume, capped: capped});
         renderTransfers(items);
       }).catch(function(err){
         console.warn(err);
         renderError(els.xfersPanel, "Couldn't load transfers from the indexer.", function(){ refreshAll(true); });
+        renderXferStats(null);
       })
     ];
 
@@ -647,7 +675,7 @@
     els.refreshBtn.addEventListener("click", function(){ refreshAll(true); });
 
     // RPC-backed metadata (name/symbol/decimals/supply straight from the contract)
-    fetchTokenMeta().then(function(){ renderHeader(); renderStats(null, null); });
+    fetchTokenMeta().then(function(){ renderHeader(); renderSupplyStat(); });
 
     pollBlock();
     setInterval(pollBlock, CONFIG.blockPollMs);
